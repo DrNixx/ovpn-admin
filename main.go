@@ -9,11 +9,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"github.com/google/uuid"
 	"io/ioutil"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	"net"
 	"net/http"
 	"os"
@@ -24,6 +20,11 @@ import (
 	"text/template"
 	"time"
 	"unicode/utf8"
+
+	"github.com/google/uuid"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 
 	"github.com/gobuffalo/packr/v2"
 	"github.com/prometheus/client_golang/prometheus"
@@ -558,27 +559,27 @@ func main() {
 	static := CacheControlWrapper(http.FileServer(staticBox))
 
 	http.Handle(*listenBaseUrl, http.StripPrefix(strings.TrimRight(*listenBaseUrl, "/"), static))
-	http.HandleFunc(*listenBaseUrl + "api/server/settings", ovpnAdmin.serverSettingsHandler)
-	http.HandleFunc(*listenBaseUrl + "api/users/list", ovpnAdmin.userListHandler)
-	http.HandleFunc(*listenBaseUrl + "api/user/create", ovpnAdmin.userCreateHandler)
-	http.HandleFunc(*listenBaseUrl + "api/user/change-password", ovpnAdmin.userChangePasswordHandler)
-	http.HandleFunc(*listenBaseUrl + "api/user/rotate", ovpnAdmin.userRotateHandler)
-	http.HandleFunc(*listenBaseUrl + "api/user/delete", ovpnAdmin.userDeleteHandler)
-	http.HandleFunc(*listenBaseUrl + "api/user/revoke", ovpnAdmin.userRevokeHandler)
-	http.HandleFunc(*listenBaseUrl + "api/user/unrevoke", ovpnAdmin.userUnrevokeHandler)
-	http.HandleFunc(*listenBaseUrl + "api/user/config/show", ovpnAdmin.userShowConfigHandler)
-	http.HandleFunc(*listenBaseUrl + "api/user/disconnect", ovpnAdmin.userDisconnectHandler)
-	http.HandleFunc(*listenBaseUrl + "api/user/statistic", ovpnAdmin.userStatisticHandler)
-	http.HandleFunc(*listenBaseUrl + "api/user/ccd", ovpnAdmin.userShowCcdHandler)
-	http.HandleFunc(*listenBaseUrl + "api/user/ccd/apply", ovpnAdmin.userApplyCcdHandler)
+	http.HandleFunc(*listenBaseUrl+"api/server/settings", ovpnAdmin.serverSettingsHandler)
+	http.HandleFunc(*listenBaseUrl+"api/users/list", ovpnAdmin.userListHandler)
+	http.HandleFunc(*listenBaseUrl+"api/user/create", ovpnAdmin.userCreateHandler)
+	http.HandleFunc(*listenBaseUrl+"api/user/change-password", ovpnAdmin.userChangePasswordHandler)
+	http.HandleFunc(*listenBaseUrl+"api/user/rotate", ovpnAdmin.userRotateHandler)
+	http.HandleFunc(*listenBaseUrl+"api/user/delete", ovpnAdmin.userDeleteHandler)
+	http.HandleFunc(*listenBaseUrl+"api/user/revoke", ovpnAdmin.userRevokeHandler)
+	http.HandleFunc(*listenBaseUrl+"api/user/unrevoke", ovpnAdmin.userUnrevokeHandler)
+	http.HandleFunc(*listenBaseUrl+"api/user/config/show", ovpnAdmin.userShowConfigHandler)
+	http.HandleFunc(*listenBaseUrl+"api/user/disconnect", ovpnAdmin.userDisconnectHandler)
+	http.HandleFunc(*listenBaseUrl+"api/user/statistic", ovpnAdmin.userStatisticHandler)
+	http.HandleFunc(*listenBaseUrl+"api/user/ccd", ovpnAdmin.userShowCcdHandler)
+	http.HandleFunc(*listenBaseUrl+"api/user/ccd/apply", ovpnAdmin.userApplyCcdHandler)
 
-	http.HandleFunc(*listenBaseUrl + "api/sync/last/try", ovpnAdmin.lastSyncTimeHandler)
-	http.HandleFunc(*listenBaseUrl + "api/sync/last/successful", ovpnAdmin.lastSuccessfulSyncTimeHandler)
-	http.HandleFunc(*listenBaseUrl + downloadCertsApiUrl, ovpnAdmin.downloadCertsHandler)
-	http.HandleFunc(*listenBaseUrl + downloadCcdApiUrl, ovpnAdmin.downloadCcdHandler)
+	http.HandleFunc(*listenBaseUrl+"api/sync/last/try", ovpnAdmin.lastSyncTimeHandler)
+	http.HandleFunc(*listenBaseUrl+"api/sync/last/successful", ovpnAdmin.lastSuccessfulSyncTimeHandler)
+	http.HandleFunc(*listenBaseUrl+downloadCertsApiUrl, ovpnAdmin.downloadCertsHandler)
+	http.HandleFunc(*listenBaseUrl+downloadCcdApiUrl, ovpnAdmin.downloadCcdHandler)
 
 	http.Handle(*metricsPath, promhttp.HandlerFor(ovpnAdmin.promRegistry, promhttp.HandlerOpts{}))
-	http.HandleFunc(*listenBaseUrl + "ping", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc(*listenBaseUrl+"ping", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "pong")
 	})
 
@@ -1146,64 +1147,7 @@ func (oAdmin *OvpnAdmin) userRotate(username, newPassword string) (error, string
 				log.Error(err)
 			}
 		} else {
-
-			var oldUserIndex, newUserIndex int
-			var oldUserSerial string
-
-			uniqHash := strings.Replace(uuid.New().String(), "-", "", -1)
-
-			usersFromIndexTxt := indexTxtParser(fRead(*indexTxtPath))
-			for i := range usersFromIndexTxt {
-				if usersFromIndexTxt[i].DistinguishedName == "/CN="+username {
-					oldUserSerial = usersFromIndexTxt[i].SerialNumber
-					usersFromIndexTxt[i].DistinguishedName = "/CN=REVOKED-" + username + "-" + uniqHash
-					oldUserIndex = i
-					break
-				}
-			}
-			err := fWrite(*indexTxtPath, renderIndexTxt(usersFromIndexTxt))
-			if err != nil {
-				log.Error(err)
-			}
-
-			if *authByPassword {
-				o := runBash(fmt.Sprintf("openvpn-user delete --force --db.path %s --user %s", *authDatabase, username))
-				log.Debug(o)
-			}
-
-			userCreated, userCreateMessage := oAdmin.userCreate(username, newPassword)
-			if !userCreated {
-				usersFromIndexTxt = indexTxtParser(fRead(*indexTxtPath))
-				for i := range usersFromIndexTxt {
-					if usersFromIndexTxt[i].SerialNumber == oldUserSerial {
-						usersFromIndexTxt[i].DistinguishedName = "/CN=" + username
-						break
-					}
-				}
-				err = fWrite(*indexTxtPath, renderIndexTxt(usersFromIndexTxt))
-				if err != nil {
-					log.Error(err)
-				}
-				return errors.New(fmt.Sprintf("error rotaing user due:  %s", userCreateMessage)), userCreateMessage
-			}
-
-			usersFromIndexTxt = indexTxtParser(fRead(*indexTxtPath))
-			for i := range usersFromIndexTxt {
-				if usersFromIndexTxt[i].DistinguishedName == "/CN="+username {
-					newUserIndex = i
-				}
-				if usersFromIndexTxt[i].SerialNumber == oldUserSerial {
-					oldUserIndex = i
-				}
-			}
-			usersFromIndexTxt[oldUserIndex], usersFromIndexTxt[newUserIndex] = usersFromIndexTxt[newUserIndex], usersFromIndexTxt[oldUserIndex]
-
-			err = fWrite(*indexTxtPath, renderIndexTxt(usersFromIndexTxt))
-			if err != nil {
-				log.Error(err)
-			}
-
-			_ = runBash(fmt.Sprintf("cd %s && %s gen-crl 1>/dev/null", *easyrsaDirPath, *easyrsaBinPath))
+			_ = runBash(fmt.Sprintf("cd %s && echo yes | %s renew %s nopass 1>/dev/null", *easyrsaDirPath, *easyrsaBinPath, username))
 		}
 		crlFix()
 		oAdmin.clients = oAdmin.usersList()
